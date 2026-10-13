@@ -2,6 +2,7 @@
 package com.example.lab09
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -19,16 +20,17 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -43,10 +45,15 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.lab09.ui.theme.Lab09Theme
+import kotlinx.coroutines.CancellationException
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -62,13 +69,25 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppPrincipal() {
+
     val navController = rememberNavController()
 
     val retrofit = remember {
+        val cliente = OkHttpClient.Builder()
+            .protocols(listOf(Protocol.HTTP_1_1))
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(15, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(false)
+            .build()
+
+
         Retrofit.Builder()
-            .baseUrl("https://json-placeholder.mock.beeceptor.com/")
+            .baseUrl("https://jsonplaceholder.typicode.com/")
+            .client(cliente)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
+
     }
 
     val servicio = remember(retrofit) {
@@ -83,15 +102,13 @@ fun AppPrincipal() {
         topBar = {
             CenterAlignedTopAppBar(
                 title = {
-                    Text(
-                        text = "JSONPlaceholder Access",
-                        style = MaterialTheme.typography.titleMedium
-                    )
+                    Text("JSONPlaceholder Access")
                 }
             )
         },
         bottomBar = {
             NavigationBar {
+
                 NavigationBarItem(
                     selected = rutaActual == "inicio",
                     onClick = {
@@ -102,32 +119,53 @@ fun AppPrincipal() {
                             launchSingleTop = true
                         }
                     },
-                    icon = { Text("⌂") },
-                    label = { Text("Inicio") }
+                    icon = {
+                        Text("⌂")
+                    },
+                    label = {
+                        Text("Inicio")
+                    }
                 )
 
                 NavigationBarItem(
                     selected = rutaActual == "posts",
                     onClick = {
-                        navController.navigate("posts") {
-                            launchSingleTop = true
+                        // Si existe la lista en la pila, vuelve a ella.
+                        val regreso = navController.popBackStack(
+                            route = "posts",
+                            inclusive = false
+                        )
+
+                        // Si no existe, abre la lista.
+                        if (!regreso) {
+                            navController.navigate("posts") {
+                                launchSingleTop = true
+                            }
                         }
                     },
-                    icon = { Text("▤") },
-                    label = { Text("Posts") }
+                    icon = {
+                        Text("▤")
+                    },
+                    label = {
+                        Text("Posts")
+                    }
                 )
             }
         }
     ) { innerPadding ->
+
         NavHost(
             navController = navController,
             startDestination = "inicio",
             modifier = Modifier.padding(innerPadding)
         ) {
+
             composable("inicio") {
                 ScreenInicio(
                     onVerPosts = {
-                        navController.navigate("posts")
+                        navController.navigate("posts") {
+                            launchSingleTop = true
+                        }
                     }
                 )
             }
@@ -147,6 +185,7 @@ fun AppPrincipal() {
                     }
                 )
             ) { entrada ->
+
                 val id = entrada.arguments?.getInt("id") ?: 1
 
                 ScreenPost(
@@ -160,6 +199,7 @@ fun AppPrincipal() {
 
 @Composable
 fun ScreenInicio(onVerPosts: () -> Unit) {
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -167,6 +207,7 @@ fun ScreenInicio(onVerPosts: () -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+
         Text(
             text = "Bienvenido",
             style = MaterialTheme.typography.headlineMedium
@@ -174,9 +215,7 @@ fun ScreenInicio(onVerPosts: () -> Unit) {
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        Text(
-            text = "Consulta publicaciones desde una API REST."
-        )
+        Text("Consulta publicaciones desde una API REST.")
 
         Spacer(modifier = Modifier.height(24.dp))
 
@@ -191,26 +230,58 @@ fun ScreenPosts(
     navController: NavHostController,
     servicio: PostApiService
 ) {
+
     var listaPosts by remember {
         mutableStateOf<List<PostModel>>(emptyList())
     }
-    var cargando by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(servicio) {
+    var cargando by remember {
+        mutableStateOf(true)
+    }
+
+    var error by remember {
+        mutableStateOf<String?>(null)
+    }
+
+    var intento by remember {
+        mutableIntStateOf(0)
+    }
+
+    LaunchedEffect(intento) {
+
         cargando = true
         error = null
 
+        Log.d("API_TEST", "Iniciando petición a /posts")
+
         try {
-            listaPosts = servicio.getUserPosts()
+            val resultado = servicio.getUserPosts()
+            listaPosts = resultado
+
+            Log.d(
+                "API_TEST",
+                "Respuesta recibida: ${resultado.size} publicaciones"
+            )
+
+        } catch (e: CancellationException) {
+            throw e
+
         } catch (e: Exception) {
-            error = e.message ?: "No se pudieron cargar las publicaciones."
+
+            error = "${e.javaClass.simpleName}: ${
+                e.message ?: "Error desconocido"
+            }"
+
+            Log.e("API_TEST", "Error real de la API", e)
+
         } finally {
             cargando = false
+            Log.d("API_TEST", "Finalizó la petición")
         }
     }
 
     when {
+
         cargando -> {
             Column(
                 modifier = Modifier.fillMaxSize(),
@@ -218,7 +289,9 @@ fun ScreenPosts(
                 verticalArrangement = Arrangement.Center
             ) {
                 CircularProgressIndicator()
+
                 Spacer(modifier = Modifier.height(12.dp))
+
                 Text("Cargando publicaciones...")
             }
         }
@@ -231,28 +304,39 @@ fun ScreenPosts(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                Text("Error al consultar la API")
+                Text(
+                    text = "Error al consultar la API",
+                    style = MaterialTheme.typography.titleMedium
+                )
+
                 Spacer(modifier = Modifier.height(8.dp))
-                Text(error ?: "")
+
+                Text(error ?: "Error desconocido")
+
                 Spacer(modifier = Modifier.height(16.dp))
 
-                Button(onClick = {
-                    navController.navigate("posts") {
-                        popUpTo("posts") {
-                            inclusive = true
-                        }
-                    }
-                }) {
+                Button(onClick = { intento++ }) {
                     Text("Reintentar")
                 }
             }
         }
 
         listaPosts.isEmpty() -> {
-            Text(
-                text = "La API no devolvió publicaciones.",
-                modifier = Modifier.padding(24.dp)
-            )
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text("La API no devolvió publicaciones.")
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Button(onClick = { intento++ }) {
+                    Text("Volver a cargar")
+                }
+            }
         }
 
         else -> {
@@ -262,7 +346,11 @@ fun ScreenPosts(
                     .padding(horizontal = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(listaPosts, key = { it.id }) { post ->
+                items(
+                    items = listaPosts,
+                    key = { post -> post.id }
+                ) { post ->
+
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(
@@ -315,26 +403,45 @@ fun ScreenPost(
     id: Int,
     servicio: PostApiService
 ) {
+
     var post by remember(id) {
         mutableStateOf<PostModel?>(null)
     }
+
     var cargando by remember(id) {
         mutableStateOf(true)
     }
+
     var error by remember(id) {
         mutableStateOf<String?>(null)
     }
 
-    LaunchedEffect(id, servicio) {
+    LaunchedEffect(id) {
+
         cargando = true
         error = null
 
+        Log.d("API_TEST", "Consultando publicación $id")
+
         try {
             post = servicio.getUserPostById(id)
+
+            Log.d("API_TEST", "Publicación $id recibida")
+
+        } catch (e: CancellationException) {
+            throw e
+
         } catch (e: Exception) {
-            error = e.message ?: "No se pudo obtener la publicación."
+
+            error = "${e.javaClass.simpleName}: ${
+                e.message ?: "Error desconocido"
+            }"
+
+            Log.e("API_TEST", "Error al consultar publicación $id", e)
+
         } finally {
             cargando = false
+            Log.d("API_TEST", "Finalizó consulta de publicación $id")
         }
     }
 
@@ -344,14 +451,21 @@ fun ScreenPost(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+
         when {
+
             cargando -> {
                 CircularProgressIndicator()
                 Text("Cargando publicación...")
             }
 
             error != null -> {
-                Text("Error: ${error}")
+                Text(
+                    text = "Error al cargar la publicación",
+                    style = MaterialTheme.typography.titleMedium
+                )
+
+                Text(error ?: "Error desconocido")
             }
 
             post != null -> {
